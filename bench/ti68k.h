@@ -62,8 +62,9 @@ typedef struct {
 
 extern ti_t ti;
 
-/* Load a 2 MB flash image (boot + AMS + archive). Returns 0 or a negative error. */
-int ti_init(const uint8_t *rom, uint32_t size);
+/* Load a 2 MB flash image (boot + AMS + archive) into `flash` (TI_FLASH_SIZE; may be `rom`
+   itself) with `ram` (TI_RAM_SIZE) as the calculator's RAM. Returns 0 or a negative error. */
+int ti_init(const uint8_t *rom, uint32_t size, uint8_t *ram, uint8_t *flash);
 void ti_reset(void);
 /* Run about `cycles` CPU clocks (whole timer ticks). */
 void ti_run(uint32_t cycles);

@@ -44,6 +44,7 @@ static int hw2_ints_masked(void)
 
 /* ---- per-instruction hook (counts) --------------------------------------------------------- */
 
+#ifndef TI_LIGHT_HOOK
 void (*ti_hist_hook)(uint32_t pc);
 
 void ti_instr_hook(unsigned int pc)
@@ -54,6 +55,14 @@ void ti_instr_hook(unsigned int pc)
 	if (ti_hist_hook)
 		ti_hist_hook(pc);
 }
+#else
+/* the add-in: count only (a 64-bit increment, ~4 SH-4 instructions) */
+void ti_instr_hook(unsigned int pc)
+{
+	(void)pc;
+	ti.instr++;
+}
+#endif
 
 /* ---- I/O ports 0x600000 -------------------------------------------------------------------- */
 
@@ -313,17 +322,17 @@ static void tick(void)
 
 /* ---- public ---------------------------------------------------------------------------------- */
 
-int ti_init(const uint8_t *rom, uint32_t size)
+int ti_init(const uint8_t *rom, uint32_t size, uint8_t *ram, uint8_t *flash)
 {
-	static uint8_t ram[TI_RAM_SIZE];
-	static uint8_t flash[TI_FLASH_SIZE];
 	if (size != TI_FLASH_SIZE)
 		return -1;
 	memset(&ti, 0, sizeof ti);
 	ti.ram = ram;
 	ti.flash = flash;
-	memcpy(flash, rom, size);
-	memset(ram, 0, sizeof ram);
+	if (flash != rom)
+		memcpy(flash, rom, size);
+	memset(ram, 0, TI_RAM_SIZE);
+	rom = flash;
 
 	/* hardware parameter block: pointer at flash + 0x104 (in the boot code) */
 	uint32_t p = (uint32_t)(rom[0x104] << 24 | rom[0x105] << 16 | rom[0x106] << 8 | rom[0x107]);

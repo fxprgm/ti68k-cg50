@@ -195,7 +195,8 @@ int main(int argc, char **argv)
 	static uint8_t rom[TI_FLASH_SIZE + 1];
 	size_t n = fread(rom, 1, sizeof rom, f);
 	fclose(f);
-	int r = ti_init(rom, (uint32_t)n);
+	static uint8_t ram[TI_RAM_SIZE], flash[TI_FLASH_SIZE];
+	int r = ti_init(rom, (uint32_t)n, ram, flash);
 	if (r) { fprintf(stderr, "bad ROM (%d)\n", r); return 1; }
 	printf("model %s HW%d, CPU %u Hz, %u cycles per timer tick, flash at 0x%06x\n",
 	       ti.model == TI_MODEL_89 ? "TI-89" : "TI-92 Plus", ti.hw, ti.clock_hz, ti.cycles_per_tick, ti.flash_base);
