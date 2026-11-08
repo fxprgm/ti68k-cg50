@@ -1,0 +1,8 @@
+# ROMs and anything derived from them never go in this repo
+*.rom
+*.ROM
+*.sav
+build/
+out/
+third_party/
+.DS_Store
