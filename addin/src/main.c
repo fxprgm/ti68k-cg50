@@ -86,19 +86,35 @@ static void line(int *y, const char *label, uint32_t v100)
 	*y += 16;
 }
 
+/* The panel's numbers, frozen when the scenario ends (step 100): afterwards the machine keeps
+   idling and the live counters keep growing, which would hide the result. */
+static uint32_t fin_emu_ms, fin_instr, fin_core_us;
+static int fin_done;
+
 static void draw(void)
 {
 	dclear(C_WHITE);
 	draw_lcd();
-	uint32_t core_ms = ST->core_us / 1000;
+	if (ST->step == 100 && !fin_done) {
+		fin_emu_ms = ST->emu_ms;
+		fin_instr = ST->instr;
+		fin_core_us = ST->core_us;
+		fin_done = 1;
+	}
+	uint32_t emu_ms = fin_done ? fin_emu_ms : ST->emu_ms;
+	uint32_t instr = fin_done ? fin_instr : ST->instr;
+	uint32_t core_ms = (fin_done ? fin_core_us : ST->core_us) / 1000;
 	int y = 2;
 	dtext(DWIDTH - 74, y, C_RED, "TIbench");
 	y += 16;
-	line(&y, "emu s", ST->emu_ms / 10);
-	line(&y, "M instr", ST->instr / 10000);
+	line(&y, "emu s", emu_ms / 10);
+	line(&y, "M instr", instr / 10000);
 	line(&y, "SH-4 s", core_ms / 10);
-	line(&y, "% speed", core_ms ? (uint32_t)((uint64_t)ST->emu_ms * 10000 / core_ms) : 0);
-	dprint(DWIDTH - 74, y, C_BLACK, "step %u", (unsigned)ST->step);
+	line(&y, "% speed", core_ms ? (uint32_t)((uint64_t)emu_ms * 10000 / core_ms) : 0);
+	if (fin_done)
+		dtext(DWIDTH - 74, y, C_RED, "DONE");
+	else
+		dprint(DWIDTH - 74, y, C_BLACK, "step %u", (unsigned)ST->step);
 	dtext(DWIDTH - 74, DHEIGHT - 12, C_BLACK, "EXIT:quit");
 	dupdate();
 	ST->frames++;
@@ -203,6 +219,7 @@ int main(void)
 
 	scenario_run();
 	ST->step = 100;
+	draw(); /* freezes the result at once */
 	while (!quit)
 		scen_run_ms(10);
 	ST->phase = PH_QUIT;
