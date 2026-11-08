@@ -17,6 +17,10 @@ set(CORE_FILES ${MUS}/m68kcpu.c ${MUS}/m68kops.c)
 set(SOURCES src/main.c src/prof.c ${BENCH}/ti68k.c ${BENCH}/scenario.c gen/rom.S ${CORE_FILES})
 
 add_executable(tibench ${SOURCES})
+# prepare.py --fastmem: inline memory fast paths + an inline instruction counter
+if(EXISTS ${GEN}/FASTMEM)
+  target_compile_definitions(tibench PRIVATE TI_INLINE_HOOK)
+endif()
 set_source_files_properties(${CORE_FILES} PROPERTIES COMPILE_OPTIONS "-w")
 target_include_directories(tibench PRIVATE src ${BENCH} ${MUS})
 target_compile_definitions(tibench PRIVATE MUSASHI_CNF="ti_m68kconf.h" M68K_USE_64_BIT=0 TI_LIGHT_HOOK)

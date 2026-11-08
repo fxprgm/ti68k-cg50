@@ -200,7 +200,8 @@ int main(int argc, char **argv)
 	if (r) { fprintf(stderr, "bad ROM (%d)\n", r); return 1; }
 	printf("model %s HW%d, CPU %u Hz, %u cycles per timer tick, flash at 0x%06x\n",
 	       ti.model == TI_MODEL_89 ? "TI-89" : "TI-92 Plus", ti.hw, ti.clock_hz, ti.cycles_per_tick, ti.flash_base);
-	ti_hist_hook = hist_hook;
+	if (!getenv("TIBENCH_NOHIST"))
+		ti_hist_hook = hist_hook;
 	ti_reset();
 	printf("start: PC 0x%06x SSP 0x%06x\n", m68k_get_reg(NULL, M68K_REG_PC), m68k_get_reg(NULL, M68K_REG_SP));
 	print_header();
@@ -231,8 +232,8 @@ int main(int argc, char **argv)
 		i = j;
 		k++;
 	}
-	printf("host: %.1f ns per 68k instruction (Musashi + counters + histogram)\n",
-	       (s.host - total0.host) * 1e9 / in);
+	printf("host: %.1f ns per 68k instruction (Musashi + counters%s)\n",
+	       (s.host - total0.host) * 1e9 / in, ti_hist_hook ? " + opcode histogram" : "");
 
 	/* opcode statistics */
 	static uint32_t idx[65536];

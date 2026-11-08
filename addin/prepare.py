@@ -10,6 +10,8 @@
 
   python3 prepare.py --rom ROMFILE [--nosave]
 
+--fastmem inlines the RAM/flash paths of every memory access (src/ti_fastmem.h) and the
+instruction counter (build with -DTI_INLINE_HOOK, CMake does when gen/FASTMEM exists).
 --nosave drops Musashi's per-instruction copy of the 16 registers (REG_DA_SAVE, kept only for
 bus-error recovery, which this machine never raises).
 Never commit gen/ or the .g3a: they hold ROM bytes.
@@ -46,6 +48,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--rom', default='')
     ap.add_argument('--nosave', action='store_true')
+    ap.add_argument('--fastmem', action='store_true',
+                    help='inline RAM/flash paths (src/ti_fastmem.h) + inline instruction counter')
     a = ap.parse_args()
 
     if os.path.isdir(GEN):
@@ -66,6 +70,17 @@ def main():
 				REG_DA_SAVE[i] = REG_DA[i];
 			}''', '''			(void)i; /* TIbench --nosave: no register snapshot */''', 'REG_DA_SAVE loop')
     open(cpu, 'w').write(src)
+    if a.fastmem:
+        hp = os.path.join(mus, 'm68kcpu.h')
+        h = open(hp).read()
+        for w in ('read', 'write'):
+            for n in (8, 16, 32):
+                call = f'm68k_{w}_memory_{n}(ADDRESS_68K(address)'
+                new = f'ti_{"rd" if w == "read" else "wr"}{n}(ADDRESS_68K(address)'
+                h = patch_once(h, call, new, call)
+        h = patch_once(h, '#include "m68k.h"', '#include "m68k.h"\n#include "ti_fastmem.h" /* TIbench --fastmem */',
+                       'm68k.h include')
+        open(hp, 'w').write(h)
     # opcode tables
     mk = os.path.join(mus, 'm68kmake_host')
     subprocess.check_call(['cc', '-O2', '-w', '-o', mk, os.path.join(mus, 'm68kmake.c')])
@@ -90,6 +105,10 @@ def main():
                    'cycles definition')
     open(c, 'w').write(t)
 
+    flag = os.path.join(GEN, 'FASTMEM')
+    if a.fastmem:
+        open(flag, 'w').close()
+
     # ROM pages
     rom = open(a.rom, 'rb').read()
     if len(rom) != 0x200000:
@@ -104,7 +123,7 @@ def main():
     with open(os.path.join(GEN, 'rom.S'), 'w') as f:
         f.write('\t.section .rodata\n\t.balign 4\n\t.global _ti_rom_pages\n_ti_rom_pages:\n'
                 f'\t.incbin "{os.path.join(GEN, "rom.bin")}"\n')
-    print(f'gen/: Musashi{" (--nosave)" if a.nosave else ""}, rom.bin {len(blob)} bytes '
+    print(f'gen/: Musashi{" --nosave" if a.nosave else ""}{" --fastmem" if a.fastmem else ""}, rom.bin {len(blob)} bytes '
           f'({len(pages)} of 512 pages) from {os.path.basename(a.rom)}')
 
 

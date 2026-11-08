@@ -34,7 +34,11 @@ int ti_int_ack(int level);
 #define M68K_MONITOR_PC             M68K_OPT_OFF
 
 /* instruction counter (and opcode / PC statistics in the bench) */
-#ifndef TI_NO_HOOK
+#if defined(TI_INLINE_HOOK)
+/* the add-in's --fastmem build: ti.instr++ inline (ti_fastmem.h) */
+#define M68K_INSTRUCTION_HOOK       M68K_OPT_SPECIFY_HANDLER
+#define M68K_INSTRUCTION_CALLBACK(pc) ti_inline_hook()
+#elif !defined(TI_NO_HOOK)
 #define M68K_INSTRUCTION_HOOK       M68K_OPT_SPECIFY_HANDLER
 #define M68K_INSTRUCTION_CALLBACK(pc) ti_instr_hook(pc)
 void ti_instr_hook(unsigned int pc);
