@@ -6,3 +6,8 @@ build/
 out/
 third_party/
 .DS_Store
+
+# add-in build products (gen/ holds ROM bytes and third-party code)
+addin/gen/
+addin/build-cg/
+*.g3a
