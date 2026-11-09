@@ -31,22 +31,26 @@ static void to_fc(uint16_t *dst, const char *name, int star)
 	dst[n] = 0;
 }
 
-/* the last path component of a found name, as ASCII */
-static void from_fc(const uint16_t *fc, char *out, int max)
+/* the last path component of a found name, as ASCII; 0 if it isn't plain ASCII or too long */
+static int from_fc(const uint16_t *fc, char *out, int max)
 {
 	const uint16_t *base = fc;
 	for (const uint16_t *p = fc; *p; p++)
 		if (*p == '\\')
 			base = p + 1;
 	int n = 0;
-	for (const uint16_t *p = base; *p && n < max - 1; p++)
-		out[n++] = *p < 0x80 ? (char)*p : '_';
+	for (const uint16_t *p = base; *p; p++) {
+		if (*p < 0x20 || *p >= 0x7f || n >= max - 1)
+			return 0;
+		out[n++] = (char)*p;
+	}
 	out[n] = 0;
+	return n > 0;
 }
 
 static int list_files(void)
 {
-	uint16_t found[FILES_NAME_MAX + 32];
+	uint16_t found[0x110];      /* BFile writes up to 0x10A characters */
 	struct BFile_FileInfo fi;
 	int sh;
 	int rc = BFile_FindFirst(req.path, &sh, found, &fi);
@@ -54,15 +58,15 @@ static int list_files(void)
 		return 0;
 	int dl = strlen(req.dir);
 	while (rc >= 0 && req.n < req.max) {
-		if (fi.type != BFile_Type_Directory && fi.type != BFile_Type_Dot && fi.type != BFile_Type_DotDot
-		    && fi.type != BFile_Type_Volume) {
+		if (fi.type != BFile_Type_Dot && fi.type != BFile_Type_DotDot && fi.type != BFile_Type_Volume
+		    && fi.type != BFile_Type_MainMem) {
 			char name[FILES_NAME_MAX];
-			from_fc(found, name, sizeof name);
-			if (dl + (int)strlen(name) < FILES_NAME_MAX) {
+			if (from_fc(found, name, sizeof name) && dl + (int)strlen(name) + 1 < FILES_NAME_MAX) {
 				files_entry_t *e = &req.out[req.n++];
 				strcpy(e->name, req.dir);
 				strcpy(e->name + dl, name);
-				e->size = fi.file_size;
+				e->dir = fi.type == BFile_Type_Directory;
+				e->size = e->dir ? 0 : fi.file_size;
 			}
 		}
 		rc = BFile_FindNext(sh, found, &fi);

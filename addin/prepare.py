@@ -26,7 +26,19 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 MUSASHI = os.path.join(ROOT, 'third_party', 'Musashi')
+MUSASHI_URL = 'https://github.com/kstenerud/Musashi.git'
+MUSASHI_COMMIT = '313ebf1bd9f4d0d93341eb5ce21fd8a119e9dbdd'   # the version tested here
 GEN = os.path.join(HERE, 'gen')
+
+
+def fetch_musashi():
+    """third_party/Musashi (MIT): cloned at the tested commit when it isn't there yet"""
+    if os.path.isfile(os.path.join(MUSASHI, 'm68kmake.c')):
+        return
+    print(f'prepare.py: fetching Musashi {MUSASHI_COMMIT[:7]} into third_party/Musashi')
+    os.makedirs(os.path.dirname(MUSASHI), exist_ok=True)
+    subprocess.run(['git', 'clone', '-q', MUSASHI_URL, MUSASHI], check=True)
+    subprocess.run(['git', '-C', MUSASHI, 'checkout', '-q', MUSASHI_COMMIT], check=True)
 
 FPU_STUB = r'''/* TIbench: stub for Musashi's m68kfpu.c (68040 FPU). A 68000 has no FPU: F-line traps. */
 void m68040_fpu_op0(void) { m68ki_exception_1111(); }
@@ -46,6 +58,7 @@ def patch_once(text, old, new, what):
 
 def gen_musashi(gen, nosave, fastmem):
     """gen/musashi: Musashi + generated tables (DRAM-resident), --nosave / --fastmem patches"""
+    fetch_musashi()
     if os.path.isdir(gen):
         shutil.rmtree(gen)
     mus = os.path.join(gen, 'musashi')

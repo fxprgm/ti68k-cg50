@@ -21,9 +21,11 @@ int files_read_at(const char *name, void *buf, int size, int pos); /* open, read
 typedef struct {
 	char name[FILES_NAME_MAX];   /* with the folder */
 	uint32_t size;
+	int dir;                     /* a folder */
 } files_entry_t;
 
-/* the files (not folders) in dir ("" = the root, "TI68K\\" = a folder); returns how many */
+/* the files and folders in dir ("" = the root, "TI68K\\" = a folder); returns how many. Names
+   that aren't plain ASCII or don't fit in FILES_NAME_MAX are left out (they couldn't be opened). */
 int files_list(const char *dir, files_entry_t *out, int max);
 
 #endif

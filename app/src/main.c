@@ -1,8 +1,8 @@
 /* TI68k: a TI-89 / TI-92 Plus emulator for the fx-CG50 (Musashi's 68000 + bench/ti68k.c).
  *
- * Holds no TI software: it loads the user's own ROM dump (a 2 MB .rom file) from the storage
- * memory, the root or a folder TI68K, and keeps the TI's state (RAM, archive, CPU) in a .sav
- * file next to it between runs. SHIFT+MENU opens the emulator's menu; MENU goes to the CG50's
+ * Holds no TI software: it loads the user's own ROM dump (any 2 MB TI-89 / TI-92 Plus flash
+ * image, chosen once in a file browser and remembered in TI68k.cfg) from the storage memory, and
+ * keeps the TI's state (RAM, archive, CPU) in a .sav file next to it between runs. SHIFT+MENU opens the emulator's menu; MENU goes to the CG50's
  * main menu (state saved first). Emulated time follows real time (a TMU); when the TI is idle
  * (AMS's low-power wait) the CG50 sleeps between 1 ms ticks, and when the TI is turned off the
  * add-in only waits for a key. The screen is redrawn where the TI's LCD changed (screen.c).
@@ -116,8 +116,6 @@ typedef struct {
 	int model;
 } rom_t;
 
-static rom_t roms[8];
-static int nroms;
 static rom_t rom;                 /* the one running */
 static char sav_name[FILES_NAME_MAX + 8];
 static char ams[8] = "?";
@@ -133,77 +131,233 @@ static int rom_model(const uint8_t *r, uint32_t avail)
 	return id == 3 ? TI_MODEL_89 : id == 1 ? TI_MODEL_92P : 0;
 }
 
-static int ends_rom(const char *n)
+#ifndef TI68K_EMBED_ROM
+/* ---- choosing the ROM file ----------------------------------------------------------------- */
+
+#define CFG_NAME  "TI68k.cfg"     /* in the root: "TI68k ROM\n<the ROM's path>\n" */
+#define CFG_MAGIC "TI68k ROM\n"
+#define PICK_MAX  128
+#define PICK_ROWS 9
+
+static files_entry_t pick_ent[PICK_MAX];
+
+static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+
+static int name_cmp(const char *a, const char *b)
 {
-	int l = strlen(n);
-	return l > 4 && n[l - 4] == '.' && (n[l - 3] | 32) == 'r' && (n[l - 2] | 32) == 'o' && (n[l - 1] | 32) == 'm';
+	while (*a && lower(*a) == lower(*b))
+		a++, b++;
+	return lower(*a) - lower(*b);
 }
 
-/* the .rom files of 2 MB in the root and in TI68K\; bad_name/bad_size: a .rom of another size */
-static void find_roms(char *bad_name, uint32_t *bad_size)
+/* a file name as shown in the list: without its folder */
+static const char *leaf(const char *name)
 {
-	static files_entry_t ent[40];
-	static const char *dirs[] = { "", "TI68K\\" };
-	nroms = 0;
-	for (int d = 0; d < 2; d++) {
-		int n = files_list(dirs[d], ent, 40);
-		for (int i = 0; i < n && nroms < 8; i++) {
-			if (!ends_rom(ent[i].name))
-				continue;
-			if (ent[i].size != ROM_SIZE) {
-				if (!*bad_name) {
-					strcpy(bad_name, ent[i].name);
-					*bad_size = ent[i].size;
-				}
-				continue;
-			}
-			if (files_read_at(ent[i].name, IOBUF, 0x10000, 0) < 0x10000)
-				continue;
-			int m = rom_model(IOBUF, 0x10000);
-			if (!m) {
-				if (!*bad_name) {
-					strcpy(bad_name, ent[i].name);
-					*bad_size = 0;
-				}
-				continue;
-			}
-			strcpy(roms[nroms].name, ent[i].name);
-			roms[nroms].model = m;
-			nroms++;
-		}
+	const char *p = strrchr(name, '\\');
+	return p ? p + 1 : name;
+}
+
+/* what the user doesn't need to see: system folders, macOS's ._ files and .fseventsd */
+static int hidden(const files_entry_t *e)
+{
+	const char *n = leaf(e->name);
+	return n[0] == '.' || n[0] == '@' || !name_cmp(n, "System Volume Information") || !name_cmp(n, "LOST.DIR");
+}
+
+/* 0: the file is a TI-89 / TI-92 Plus flash image (r->model set); else an explanation in why */
+static int check_rom(const char *name, rom_t *r, char *why, int max)
+{
+	int size = files_exists(name);
+	if (size < 0) {
+		snprintf(why, max, "%s can't be opened.", name);
+		return -1;
 	}
+	if (size != ROM_SIZE) {
+		snprintf(why, max, "%s is %d bytes.\nA TI-89 / TI-92 Plus ROM dump is 2 MB\n(2097152 bytes).",
+		         leaf(name), size);
+		return -1;
+	}
+	if (files_read_at(name, IOBUF, 0x10000, 0) < 0x10000) {
+		snprintf(why, max, "Reading %s failed.", leaf(name));
+		return -1;
+	}
+	int m = rom_model(IOBUF, 0x10000);
+	if (!m) {
+		snprintf(why, max, "%s is 2 MB but isn't a TI-89 or\nTI-92 Plus ROM dump.", leaf(name));
+		return -1;
+	}
+	strcpy(r->name, name);
+	r->model = m;
+	return 0;
 }
 
-static const char *model_name(int m) { return m == TI_MODEL_89 ? "TI-89" : "TI-92 Plus"; }
+/* the ROM chosen last time (TI68k.cfg), if it is still there and still a ROM */
+static int cfg_rom(rom_t *r)
+{
+	char buf[FILES_NAME_MAX + 16] = "";
+	int n = files_read_at(CFG_NAME, buf, sizeof buf - 2, 0);
+	if (n <= (int)strlen(CFG_MAGIC) || memcmp(buf, CFG_MAGIC, strlen(CFG_MAGIC)))
+		return -1;
+	buf[n] = 0;
+	char *name = buf + strlen(CFG_MAGIC), *nl = strchr(name, '\n');
+	if (!nl || nl == name || nl - name >= FILES_NAME_MAX)
+		return -1;
+	*nl = 0;
+	char why[160];
+	return check_rom(name, r, why, sizeof why);
+}
 
-/* several ROMs: the user picks one */
-static int choose_rom(void)
+static void cfg_save(const char *name)
+{
+	char buf[FILES_NAME_MAX + 16];
+	int n = snprintf(buf, sizeof buf, CFG_MAGIC "%s\n", name);
+	if (n & 1)
+		buf[n++] = '\n';      /* BFile writes even sizes */
+	int h = files_create(CFG_NAME);
+	if (h < 0)
+		return;
+	files_write(h, buf, n);
+	files_close(h);
+}
+
+/* the folder part of a name, with its '\' ("" for the root) */
+static void folder_of(char *dir, const char *name)
+{
+	strcpy(dir, name);
+	char *p = strrchr(dir, '\\');
+	*(p ? p + 1 : dir) = 0;
+}
+
+/* a file browser over the storage memory: any file of any name can be chosen; it must be a 2 MB
+   TI-89 / TI-92 Plus flash image. `current` (or NULL) is the ROM running now. 0 = chosen (*r),
+   -1 = EXIT at the root */
+static int pick_rom(rom_t *r, const rom_t *current)
 {
 	ST->phase = PH_CHOOSE;
-	int sel = 0;
+	char dir[FILES_NAME_MAX] = "", came_from[FILES_NAME_MAX] = "";
+	if (current)
+		folder_of(dir, current->name);
 	for (;;) {
-		dclear(C_WHITE);
-		drect(0, 0, DWIDTH - 1, 22, C_PANEL);
-		dtext(8, 6, C_TITLE, "TI68k: which ROM?");
-		for (int i = 0; i < nroms; i++) {
-			int y = 34 + 18 * i;
-			if (i == sel)
-				drect(4, y - 2, DWIDTH - 5, y + 13, C_SEL);
-			dprint(12, y, i == sel ? C_WHITE : C_BLACK, "%s  (%s)", roms[i].name, model_name(roms[i].model));
+		/* the folder's entries: ".." first (in a folder), then folders, then files, by name */
+		int n = 0;
+		if (*dir) {
+			strcpy(pick_ent[0].name, "..");
+			pick_ent[0].dir = 1;
+			pick_ent[0].size = 0;
+			n = 1;
 		}
-		dtext(8, DHEIGHT - 16, C_FOOT, "UP/DOWN, EXE: start    EXIT: quit");
-		dupdate();
-		int k = wait_key();
-		if (k == KEY_UP)
-			sel = (sel + nroms - 1) % nroms;
-		else if (k == KEY_DOWN)
-			sel = (sel + 1) % nroms;
-		else if (k == KEY_EXE)
-			return sel;
-		else if (k == KEY_EXIT || k == KEY_MENU)
-			return -1;
+		int got = files_list(dir, pick_ent + n, PICK_MAX - n);
+		for (int i = n, end = n + got; i < end; i++)
+			if (!hidden(&pick_ent[i]))
+				pick_ent[n++] = pick_ent[i];
+		int first = *dir ? 1 : 0;
+		for (int i = first + 1; i < n; i++) {
+			files_entry_t e = pick_ent[i];
+			int j = i;
+			while (j > first && (pick_ent[j - 1].dir < e.dir
+			       || (pick_ent[j - 1].dir == e.dir && name_cmp(leaf(pick_ent[j - 1].name), leaf(e.name)) > 0))) {
+				pick_ent[j] = pick_ent[j - 1];
+				j--;
+			}
+			pick_ent[j] = e;
+		}
+		/* the cursor: on the folder just left, else the first 2 MB file that isn't the running
+		   ROM, else the top */
+		int sel = 0, best = -1;
+		for (int i = 0; i < n; i++) {
+			if (*came_from && pick_ent[i].dir && !strcmp(pick_ent[i].name, came_from)) {
+				best = i;
+				break;
+			}
+			if (best < 0 && !pick_ent[i].dir && pick_ent[i].size == ROM_SIZE
+			    && !(current && !strcmp(pick_ent[i].name, current->name)))
+				best = i;
+		}
+		if (best >= 0)
+			sel = best;
+		*came_from = 0;
+
+		for (int reload = 0; !reload;) {
+			int top = sel < PICK_ROWS ? 0 : sel - PICK_ROWS + 1;
+			set_msg(n ? leaf(pick_ent[sel].name) : "");
+			dclear(C_WHITE);
+			drect(0, 0, DWIDTH - 1, 22, C_PANEL);
+			dtext(8, 6, C_TITLE, "TI68k: choose your ROM");
+			dprint(8, 28, C_BLACK, "The ROM dump of your TI-89 / TI-92 Plus (2 MB).");
+			dprint(8, 44, C_RGB(4, 8, 20), "Storage memory\\%s", dir);
+			if (!n)
+				dtext(16, 66, C_FOOT, "(no files here)");
+			for (int i = top; i < n && i < top + PICK_ROWS; i++) {
+				int y = 62 + 15 * (i - top);
+				const files_entry_t *e = &pick_ent[i];
+				if (i == sel)
+					drect(4, y - 2, DWIDTH - 5, y + 12, C_SEL);
+				int fg = i == sel ? C_WHITE : C_BLACK;
+				if (e->dir) {
+					dprint(12, y, fg, "%s\\", leaf(e->name));
+					dtext(320, y, i == sel ? C_WHITE : C_FOOT, !strcmp(e->name, "..") ? "up" : "folder");
+				} else {
+					int rom2 = e->size == ROM_SIZE;
+					dtext(12, y, fg, leaf(e->name));
+					if (rom2)
+						dtext(320, y, i == sel ? C_WHITE : C_RGB(2, 18, 4), "2 MB");
+					else
+						dprint(320, y, i == sel ? C_WHITE : C_FOOT, "%d KB", (int)((e->size + 1023) / 1024));
+				}
+			}
+			if (top > 0)
+				dtext(DWIDTH - 14, 62, C_FOOT, "^");
+			if (top + PICK_ROWS < n)
+				dtext(DWIDTH - 14, 62 + 15 * (PICK_ROWS - 1), C_FOOT, "v");
+			dtext(8, DHEIGHT - 16, C_FOOT, *dir ? "EXE: choose / open    EXIT: back"
+			                                   : current ? "EXE: choose / open    EXIT: cancel"
+			                                             : "EXE: choose / open    EXIT: quit");
+			dupdate();
+
+			int k = wait_key();
+			if (k == KEY_UP && n)
+				sel = (sel + n - 1) % n;
+			else if (k == KEY_DOWN && n)
+				sel = (sel + 1) % n;
+			else if (k == KEY_LEFT && n)
+				sel = sel > PICK_ROWS ? sel - PICK_ROWS : 0;
+			else if (k == KEY_RIGHT && n)
+				sel = sel + PICK_ROWS < n ? sel + PICK_ROWS : n - 1;
+			else if (k == KEY_EXIT || k == KEY_MENU) {
+				if (!*dir)
+					return -1;
+				dir[strlen(dir) - 1] = 0;          /* up one folder */
+				strcpy(came_from, dir);
+				folder_of(dir, came_from);
+				reload = 1;
+			} else if (k == KEY_EXE && n) {
+				const files_entry_t *e = &pick_ent[sel];
+				if (!strcmp(e->name, "..")) {
+					dir[strlen(dir) - 1] = 0;
+					strcpy(came_from, dir);
+					folder_of(dir, came_from);
+					reload = 1;
+				} else if (e->dir) {
+					if (strlen(e->name) + 2 < FILES_NAME_MAX) {
+						strcpy(dir, e->name);
+						strcat(dir, "\\");
+						reload = 1;
+					}
+				} else {
+					char why[200];
+					if (check_rom(e->name, r, why, sizeof why) == 0)
+						return 0;
+					set_msg("not a ROM");
+					message("TI68k: not a ROM", why, "Press any key");
+					wait_key();
+				}
+			}
+		}
 	}
 }
+#endif
+
+static const char *model_name(int m) { return m == TI_MODEL_89 ? "TI-89" : "TI-92 Plus"; }
 
 /* the AMS version ("2.09") from its "2.09, 03/27/2003" string, and what we know about it */
 static void ams_info(void)
@@ -284,9 +438,13 @@ static void rom_ready(void)
 	fresh_machine();
 	ams_info();
 	ST->model = (uint32_t)ti.model;
+	/* next to the ROM: its name with .sav for its extension (a ROM named *.sav gets _.sav) */
 	strcpy(sav_name, rom.name);
-	char *dot = strrchr(sav_name, '.');
-	strcpy(dot ? dot : sav_name + strlen(sav_name), ".sav");
+	char *slash = strrchr(sav_name, '\\'), *dot = strrchr(slash ? slash : sav_name, '.');
+	if (!dot)
+		dot = sav_name + strlen(sav_name);
+	int is_sav = !strcmp(dot, ".sav") || !strcmp(dot, ".SAV") || !strcmp(dot, ".Sav");
+	strcpy(is_sav ? dot + strlen(dot) : dot, is_sav ? "_.sav" : ".sav");
 }
 
 /* ---- state --------------------------------------------------------------------------------- */
@@ -576,8 +734,27 @@ static void about(void)
 
 /* ---- the menu ------------------------------------------------------------------------------ */
 
-enum { M_RESUME, M_HELP, M_SPEED, M_SAVE, M_RESET, M_QUIT, M_QUIT_NOSAVE, M_ABOUT, M_COUNT };
-enum { MENU_RESUME, MENU_QUIT };
+enum { M_RESUME, M_HELP, M_SPEED, M_SAVE, M_ROM, M_RESET, M_QUIT, M_QUIT_NOSAVE, M_ABOUT, M_COUNT };
+enum { MENU_RESUME, MENU_QUIT, MENU_ROM };
+
+/* the items shown: "Choose another ROM" only when the ROM comes from a file */
+static int menu_ids[M_COUNT], menu_n;
+
+static void menu_items(void)
+{
+	menu_n = 0;
+	for (int i = 0; i < M_COUNT; i++) {
+#ifdef TI68K_EMBED_ROM
+		if (i == M_ROM)
+			continue;
+#endif
+		menu_ids[menu_n++] = i;
+	}
+}
+
+#ifndef TI68K_EMBED_ROM
+static rom_t next_rom;        /* chosen in the menu, loaded once run() has returned */
+#endif
 
 /* the keys that opened the menu must go up before it reads keys (a MENU press seen twice
    would close it at once) */
@@ -598,21 +775,23 @@ static int menu(void)
 	wait_release();
 	uint32_t opened = clock_ms();
 	int sel = 0;
+	menu_items();
 	for (;;) {
 		screen_invalidate();
 		int y0, y1;
 		screen_update(&y0, &y1);
 		draw_panel();
-		int bx = 30, by = 24, bw = 250, bh = 18 * M_COUNT + 30;
+		int bx = 30, by = 20, bw = 250, bh = 18 * menu_n + 30;
 		drect_border(bx, by, bx + bw, by + bh, C_WHITE, 2, C_PANEL);
 		dtext(bx + 10, by + 6, C_PANEL, "TI68k menu");
-		for (int i = 0; i < M_COUNT; i++) {
+		for (int i = 0; i < menu_n; i++) {
 			char item[48];
-			switch (i) {
+			switch (menu_ids[i]) {
 			case M_RESUME: strcpy(item, "Resume"); break;
 			case M_HELP: strcpy(item, "Keys"); break;
 			case M_SPEED: snprintf(item, sizeof item, "Speed display: %s", show_speed ? "on" : "off"); break;
 			case M_SAVE: strcpy(item, "Save state now"); break;
+			case M_ROM: strcpy(item, "Choose another ROM"); break;
 			case M_RESET: strcpy(item, "Reset the TI (fresh boot)"); break;
 			case M_QUIT: strcpy(item, "Quit (save state)"); break;
 			case M_QUIT_NOSAVE: strcpy(item, "Quit without saving"); break;
@@ -627,13 +806,13 @@ static int menu(void)
 		int key = wait_key();
 		ST->menu_keys = ST->menu_keys << 8 | (uint32_t)(key & 0xff);
 		if (key == KEY_UP)
-			sel = (sel + M_COUNT - 1) % M_COUNT;
+			sel = (sel + menu_n - 1) % menu_n;
 		else if (key == KEY_DOWN)
-			sel = (sel + 1) % M_COUNT;
+			sel = (sel + 1) % menu_n;
 		else if (key == KEY_EXIT || (key == KEY_MENU && clock_ms() - opened >= 400))
 			return MENU_RESUME;   /* (a MENU "press" right away is the opening one bouncing) */
 		else if (key == KEY_EXE) {
-			switch (sel) {
+			switch (menu_ids[sel]) {
 			case M_RESUME:
 				return MENU_RESUME;
 			case M_HELP:
@@ -663,6 +842,17 @@ static int menu(void)
 				break;
 			case M_QUIT_NOSAVE:
 				return MENU_QUIT;
+#ifndef TI68K_EMBED_ROM
+			case M_ROM:
+				/* the running TI's state is saved before the other ROM is loaded */
+				if (pick_rom(&next_rom, &rom) == 0) {
+					if (!strcmp(next_rom.name, rom.name))
+						break;          /* the same file: nothing to do */
+					if (save_state() == 0)
+						return MENU_ROM;
+				}
+				break;
+#endif
 			case M_ABOUT:
 				about();
 				break;
@@ -700,7 +890,10 @@ static int ti_is_off(void)
 	return ti.lowpower && !ti.lcd_on;
 }
 
-static void run(void)
+/* RUN_QUIT: quit the add-in; RUN_ROM: load next_rom */
+enum { RUN_QUIT, RUN_ROM };
+
+static int run(void)
 {
 	ST->phase = PH_RUN;
 	panel_x = ti.model == TI_MODEL_89 ? 320 : 360;
@@ -732,7 +925,7 @@ static void run(void)
 		}
 		if (power || req == KEYS_OSMENU || (ti_is_off() && clock_ms() - last_key > AUTO_OFF_MS)) {
 			if (away(power || req != KEYS_OSMENU) < 0)
-				return;
+				return RUN_QUIT;
 			ST->phase = PH_RUN;
 			redraw_all();
 			off_drawn = 0;
@@ -741,8 +934,11 @@ static void run(void)
 			continue;
 		}
 		if (req == KEYS_MENU || req == KEYS_MENU_2ND) {
-			if (menu() == MENU_QUIT)
-				return;
+			int m = menu();
+			if (m == MENU_QUIT)
+				return RUN_QUIT;
+			if (m == MENU_ROM)
+				return RUN_ROM;
 			ST->phase = PH_RUN;
 			if (req == KEYS_MENU_2ND)
 				cancel_2nd(emu_now());
@@ -841,55 +1037,35 @@ int main(void)
 		clock_quit();
 		return 1;
 	}
+	rom_ready();
+	if (restore_state() == 0)
+		run();
 #else
+	/* the ROM chosen last time, else the file browser */
 	ST->phase = PH_FIND;
-	message("TI68k", "Looking for a ROM file...", NULL);
-	char bad[FILES_NAME_MAX] = "";
-	uint32_t bad_size = 0;
-	find_roms(bad, &bad_size);
-	if (!nroms) {
-		ST->phase = PH_ERROR + 3;
-		set_msg("no ROM");
-		char text[400];
-		int n = snprintf(text, sizeof text,
-		         "No TI-89 / TI-92 Plus ROM found.\n\n"
-		         "Put the ROM dump of your own calculator\n"
-		         "(a 2 MB .rom file, e.g. TI89.rom or TI92P.rom,\n"
-		         "made with TiLP or TiEmu) in the root of the\n"
-		         "storage memory or in a folder named TI68K,\n"
-		         "then start TI68k again.");
-		if (*bad && n < (int)sizeof text) {
-			if (bad_size)
-				snprintf(text + n, sizeof text - n, "\n\n(%s is %u bytes, not 2 MB.)", bad, (unsigned)bad_size);
-			else
-				snprintf(text + n, sizeof text - n, "\n\n(%s is not a TI-89 / TI-92 Plus flash image.)", bad);
+	if (cfg_rom(&rom) < 0) {
+		if (pick_rom(&rom, NULL) < 0) {
+			clock_quit();
+			return 0;
 		}
-		message("TI68k: no ROM", text, "Press any key to quit");
-		wait_key();
-		clock_quit();
-		return 0;
+		cfg_save(rom.name);
 	}
-	int pick = 0;
-	if (nroms > 1 && (pick = choose_rom()) < 0) {
-		clock_quit();
-		return 0;
-	}
-	rom = roms[pick];
-	if (load_rom() < 0) {
-		ST->phase = PH_ERROR + 2;
-		set_msg("ROM load failed");
-		message("TI68k", "Reading the ROM file failed.", "Press any key to quit");
-		wait_key();
-		clock_quit();
-		return 0;
+	for (;;) {
+		if (load_rom() < 0) {
+			ST->phase = PH_ERROR + 2;
+			set_msg("ROM load failed");
+			message("TI68k", "Reading the ROM file failed.", "Press any key to quit");
+			wait_key();
+			clock_quit();
+			return 0;
+		}
+		rom_ready();
+		if (restore_state() < 0 || run() != RUN_ROM)
+			break;
+		rom = next_rom;           /* "Choose another ROM": the old state is saved */
+		cfg_save(rom.name);
 	}
 #endif
-	rom_ready();
-	if (restore_state() < 0) {
-		clock_quit();
-		return 0;
-	}
-	run();
 	ST->phase = PH_QUIT;
 	clock_quit();
 	return 0;
