@@ -25,6 +25,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+# The ROM dump of your own TI-89 / TI-92 Plus (a 2 MB flash image) that TIbench runs: fill in its
+# path here, or pass --rom ROMFILE. TIbench embeds it, so the .g3a is for your calculator only.
+ROM_PATH = ''
+
 MUSASHI = os.path.join(ROOT, 'third_party', 'Musashi')
 MUSASHI_URL = 'https://github.com/kstenerud/Musashi.git'
 MUSASHI_COMMIT = '313ebf1bd9f4d0d93341eb5ce21fd8a119e9dbdd'   # the version tested here
@@ -136,11 +140,17 @@ def gen_rom(gen, rom_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--rom', default='')
+    ap.add_argument('--rom', default=ROM_PATH, help='your TI-89 / TI-92 Plus ROM dump (2 MB)')
     ap.add_argument('--nosave', action='store_true')
     ap.add_argument('--fastmem', action='store_true',
                     help='inline RAM/flash paths (src/ti_fastmem.h) + inline instruction counter')
     a = ap.parse_args()
+    if not a.rom:
+        sys.exit('prepare.py: no ROM set. TIbench needs the ROM dump of your own TI-89 / TI-92 Plus:\n'
+                 '  python3 prepare.py --rom path/to/your.rom [--nosave] [--fastmem]\n'
+                 'or fill in ROM_PATH at the top of addin/prepare.py.')
+    if not os.path.isfile(a.rom):
+        sys.exit(f'prepare.py: no ROM file at {a.rom}')
     gen_musashi(GEN, a.nosave, a.fastmem)
     n, pages = gen_rom(GEN, a.rom)
     print(f'gen/: Musashi{" --nosave" if a.nosave else ""}{" --fastmem" if a.fastmem else ""}, rom.bin {n} bytes '
