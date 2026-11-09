@@ -29,6 +29,7 @@
 
 #define K TI_KEY
 #define ON TI_KEY_ON
+#define NOKEY 0xFE   /* a TI key the model doesn't have */
 
 static const keymap_t map89[] = {
 	{ KEY_F1, K(5, 7), "F1", "F1" },          { KEY_F2, K(4, 7), "F2", "F2" },
@@ -145,7 +146,7 @@ static int slot(int key) { return key == ON ? 80 : key; }
 
 static void apply(int key, int down)
 {
-	if (key >= 0xFE)
+	if (key == NOKEY)
 		return;
 	ti_key(key, down);
 	is_down[slot(key)] = (uint8_t)down;
@@ -165,7 +166,7 @@ static void enqueue(int key, int down, uint32_t at)
 /* TI key down at `now` or after the last release + GAP; returns when it goes down */
 static uint32_t ti_down(int key, uint32_t now)
 {
-	if (key >= 0xFE)
+	if (key == NOKEY)
 		return now;
 	uint32_t at = now;
 	if ((int32_t)(last_release + GAP - at) > 0)
@@ -178,7 +179,7 @@ static uint32_t ti_down(int key, uint32_t now)
 /* TI key up, no sooner than MIN_HOLD after it went down; returns when */
 static uint32_t ti_up(int key, uint32_t now)
 {
-	if (key >= 0xFE)
+	if (key == NOKEY)
 		return now;
 	uint32_t at = down_at[slot(key)] + MIN_HOLD;
 	if ((int32_t)(at - now) < 0)

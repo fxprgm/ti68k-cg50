@@ -341,8 +341,8 @@ static int restore_state(void)
 	char text[300];
 	snprintf(text, sizeof text,
 	         "The saved state %s can't be used:\n%s.\n\n"
-	         "EXE: start the %s fresh (a new boot). The old file\n"
-	         "     is replaced at the next save.\n"
+	         "EXE: start the %s fresh (a new boot);\n"
+	         "     the old file is replaced at the next save.\n"
 	         "EXIT: quit and keep the file as it is.", sav_name, err, model_name(ti.model));
 	message("TI68k: saved state", text, NULL);
 	for (;;) {
@@ -511,6 +511,14 @@ static void redraw_all(void)
 
 /* ---- help and about ------------------------------------------------------------------------ */
 
+static int same_name(const char *a, const char *b)
+{
+	for (; *a && *b; a++, b++)
+		if ((*a | 32) != (*b | 32))
+			return 0;
+	return *a == *b;
+}
+
 static void help(void)
 {
 	ST->phase = PH_HELP;
@@ -520,22 +528,31 @@ static void help(void)
 	int n = 0;
 	for (int i = 0; i < keymap_count; i++) {
 		const keymap_t *k = &keymap[i];
-		if (!strcmp(k->cg_name, k->ti_name) || k->cg == KEY_MUL || k->cg == KEY_DIV)
+		if (same_name(k->cg_name, k->ti_name) || k->cg == KEY_MUL || k->cg == KEY_DIV)
 			continue;
-		int col = n / 10, y = 24 + 13 * (n % 10), x = 4 + 132 * col;
+		int col = n / 10, y = 22 + 12 * (n % 10), x = 4 + 140 * col;
 		dtext(x, y, C_BLUE, k->cg_name);
-		dtext(x + 46, y, C_BLACK, k->ti_name);
+		dtext(x + 50, y, C_BLACK, k->ti_name);
 		n++;
 	}
-	int y = 24 + 13 * 10 + 4;
-	dtext(4, y, C_BLACK, "SHIFT+VARS: shift   SHIFT+AC/ON: OFF   MENU: CG50 main menu");
-	if (ti.model == TI_MODEL_92P)
-		dtext(4, y + 13, C_BLACK, "SHIFT+OPTN: HAND   ALPHA ^: theta   2nd/diamond+key as on the TI");
-	else
-		dtext(4, y + 13, C_BLACK, "ALPHA held + key: the TI-89's own alpha (its letter positions)");
-	dtext(4, y + 26, C_BLACK, "ALPHA, key: the red letter (SHIFT too: capital)");
-	dtext(4, y + 39, C_BLACK, "SHIFT+ALPHA: letter lock, ALPHA ends it");
-	dtext(4, y + 52, C_RED, "SHIFT+MENU: TI68k menu      Other keys: as labelled");
+	int y = 22 + 12 * 10 + 4;
+	static const char *lines89[] = {
+		"SHIFT+VARS: shift (TI)   SHIFT+AC/ON: OFF",
+		"ALPHA, key: its red letter (SHIFT too: capital)",
+		"SHIFT, ALPHA: letter lock; ALPHA ends it",
+		"ALPHA held + key: the TI-89's own alpha key",
+		"MENU: CG50 main menu (the state is saved first)",
+	};
+	static const char *lines92[] = {
+		"SHIFT+VARS: shift   SHIFT+OPTN: HAND",
+		"ALPHA, key: its red letter (^ = theta, . = space)",
+		"SHIFT, ALPHA: letter lock; ALPHA ends it",
+		"SHIFT+AC/ON: OFF    other keys: as labelled",
+		"MENU: CG50 main menu (the state is saved first)",
+	};
+	for (int i = 0; i < 5; i++)
+		dtext(4, y + 13 * i, C_BLACK, (ti.model == TI_MODEL_89 ? lines89 : lines92)[i]);
+	dtext(4, DHEIGHT - 14, C_RED, "SHIFT+MENU: TI68k menu      any key: back");
 	dupdate();
 	wait_key();
 }
@@ -562,10 +579,24 @@ static void about(void)
 enum { M_RESUME, M_HELP, M_SPEED, M_SAVE, M_RESET, M_QUIT, M_QUIT_NOSAVE, M_ABOUT, M_COUNT };
 enum { MENU_RESUME, MENU_QUIT };
 
+/* the keys that opened the menu must go up before it reads keys (a MENU press seen twice
+   would close it at once) */
+static void wait_release(void)
+{
+	for (int i = 0; i < 3000 && keydown_any(KEY_SHIFT, KEY_MENU, 0); i++) {
+		clearevents();
+		sleep();
+	}
+	clearevents();
+}
+
 static int menu(void)
 {
 	ST->phase = PH_MENU;
+	ST->menus++;
 	keys_release_all();
+	wait_release();
+	uint32_t opened = clock_ms();
 	int sel = 0;
 	for (;;) {
 		screen_invalidate();
@@ -594,12 +625,13 @@ static int menu(void)
 		}
 		dupdate();
 		int key = wait_key();
+		ST->menu_keys = ST->menu_keys << 8 | (uint32_t)(key & 0xff);
 		if (key == KEY_UP)
 			sel = (sel + M_COUNT - 1) % M_COUNT;
 		else if (key == KEY_DOWN)
 			sel = (sel + 1) % M_COUNT;
-		else if (key == KEY_EXIT || key == KEY_MENU)
-			return MENU_RESUME;
+		else if (key == KEY_EXIT || (key == KEY_MENU && clock_ms() - opened >= 400))
+			return MENU_RESUME;   /* (a MENU "press" right away is the opening one bouncing) */
 		else if (key == KEY_EXE) {
 			switch (sel) {
 			case M_RESUME:
@@ -693,8 +725,10 @@ static void run(void)
 				continue;
 			}
 			int r = keys_event(ev.key, ev.type == KEYEV_DOWN, emu_now());
-			if (r != KEYS_NONE)
+			if (r != KEYS_NONE) {
 				req = r;
+				ST->last_req = (uint32_t)(r | ev.key << 8);
+			}
 		}
 		if (power || req == KEYS_OSMENU || (ti_is_off() && clock_ms() - last_key > AUTO_OFF_MS)) {
 			if (away(power || req != KEYS_OSMENU) < 0)

@@ -32,6 +32,9 @@ typedef struct {
 	uint32_t saves;        /* 22 state files written */
 	uint32_t ams_known;    /* 23 1 if this AMS version's modifier address is known */
 	char msg[64];          /* 24-39 last message (errors) */
+	uint32_t menus;        /* 40 times the emulator menu opened */
+	uint32_t last_req;     /* 41 the last request from keys_event (KEYS_*) | key << 8 */
+	uint32_t menu_keys;    /* 42 the last 4 keys the menu read, newest in the low byte */
 } stats_t;
 
 enum {

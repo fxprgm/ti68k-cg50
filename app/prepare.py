@@ -34,6 +34,9 @@ def main():
               f'({pages} of 512 pages, {n} bytes) -> TI68Krom.g3a: personal build, never share it')
     else:
         print('gen/: Musashi --nosave --fastmem, no ROM -> TI68k.g3a')
+    # CMakeLists.txt picks the variant (gen/rom.S or not) at configure time: make the next
+    # `fxsdk build-cg` configure again
+    os.utime(os.path.join(HERE, 'CMakeLists.txt'))
 
 
 if __name__ == '__main__':
