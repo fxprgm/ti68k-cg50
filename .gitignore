@@ -11,3 +11,6 @@ third_party/
 addin/gen/
 addin/build-cg/
 *.g3a
+app/gen/
+app/build-cg/
+__pycache__/

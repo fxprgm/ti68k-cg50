@@ -44,17 +44,11 @@ def patch_once(text, old, new, what):
     return text.replace(old, new)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--rom', default='')
-    ap.add_argument('--nosave', action='store_true')
-    ap.add_argument('--fastmem', action='store_true',
-                    help='inline RAM/flash paths (src/ti_fastmem.h) + inline instruction counter')
-    a = ap.parse_args()
-
-    if os.path.isdir(GEN):
-        shutil.rmtree(GEN)
-    mus = os.path.join(GEN, 'musashi')
+def gen_musashi(gen, nosave, fastmem):
+    """gen/musashi: Musashi + generated tables (DRAM-resident), --nosave / --fastmem patches"""
+    if os.path.isdir(gen):
+        shutil.rmtree(gen)
+    mus = os.path.join(gen, 'musashi')
     os.makedirs(mus)
     for f in ['m68kcpu.c', 'm68kcpu.h', 'm68k.h', 'm68k_in.c', 'm68kmake.c']:
         shutil.copy(os.path.join(MUSASHI, f), mus)
@@ -65,12 +59,12 @@ def main():
         f.write(MMU_STUB)
     cpu = os.path.join(mus, 'm68kcpu.c')
     src = open(cpu).read()
-    if a.nosave:
+    if nosave:
         src = patch_once(src, '''			for (i = 15; i >= 0; i--){
 				REG_DA_SAVE[i] = REG_DA[i];
 			}''', '''			(void)i; /* TIbench --nosave: no register snapshot */''', 'REG_DA_SAVE loop')
     open(cpu, 'w').write(src)
-    if a.fastmem:
+    if fastmem:
         hp = os.path.join(mus, 'm68kcpu.h')
         h = open(hp).read()
         for w in ('read', 'write'):
@@ -104,13 +98,14 @@ def main():
     t = patch_once(t, 'unsigned char m68ki_cycles[NUM_CPU_TYPES][0x10000]; /* Cycles used by CPU type */', '',
                    'cycles definition')
     open(c, 'w').write(t)
+    if fastmem:
+        open(os.path.join(gen, 'FASTMEM'), 'w').close()
 
-    flag = os.path.join(GEN, 'FASTMEM')
-    if a.fastmem:
-        open(flag, 'w').close()
 
-    # ROM pages
-    rom = open(a.rom, 'rb').read()
+def gen_rom(gen, rom_path):
+    """gen/rom.bin + gen/rom.S (`ti_rom_pages`): the flash image's non-empty 4 KB pages.
+    Returns (blob size, page count)."""
+    rom = open(rom_path, 'rb').read()
     if len(rom) != 0x200000:
         sys.exit('prepare.py: expected a 2 MB flash image')
     pages = [i for i in range(0, len(rom) // 4096) if rom[i * 4096:(i + 1) * 4096] != b'\xff' * 4096]
@@ -118,13 +113,25 @@ def main():
     if len(idx) % 4:
         idx += b'\0\0'
     blob = b'TIRM' + struct.pack('>I', len(pages)) + idx + b''.join(rom[p * 4096:(p + 1) * 4096] for p in pages)
-    with open(os.path.join(GEN, 'rom.bin'), 'wb') as f:
+    with open(os.path.join(gen, 'rom.bin'), 'wb') as f:
         f.write(blob)
-    with open(os.path.join(GEN, 'rom.S'), 'w') as f:
+    with open(os.path.join(gen, 'rom.S'), 'w') as f:
         f.write('\t.section .rodata\n\t.balign 4\n\t.global _ti_rom_pages\n_ti_rom_pages:\n'
-                f'\t.incbin "{os.path.join(GEN, "rom.bin")}"\n')
-    print(f'gen/: Musashi{" --nosave" if a.nosave else ""}{" --fastmem" if a.fastmem else ""}, rom.bin {len(blob)} bytes '
-          f'({len(pages)} of 512 pages) from {os.path.basename(a.rom)}')
+                f'\t.incbin "{os.path.join(gen, "rom.bin")}"\n')
+    return len(blob), len(pages)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--rom', default='')
+    ap.add_argument('--nosave', action='store_true')
+    ap.add_argument('--fastmem', action='store_true',
+                    help='inline RAM/flash paths (src/ti_fastmem.h) + inline instruction counter')
+    a = ap.parse_args()
+    gen_musashi(GEN, a.nosave, a.fastmem)
+    n, pages = gen_rom(GEN, a.rom)
+    print(f'gen/: Musashi{" --nosave" if a.nosave else ""}{" --fastmem" if a.fastmem else ""}, rom.bin {n} bytes '
+          f'({pages} of 512 pages) from {os.path.basename(a.rom)}')
 
 
 if __name__ == '__main__':

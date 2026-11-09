@@ -69,6 +69,8 @@ void ti_reset(void);
 /* Run about `cycles` CPU clocks (whole timer ticks). */
 void ti_run(uint32_t cycles);
 void ti_key(int key, int down);
+/* re-assert the interrupt level from ti.pending (after ti and the CPU were restored) */
+void ti_sync_irq(void);
 /* 1-bit LCD frame: 30 bytes per row, 128 rows (the 89 shows the top-left 160x100) */
 const uint8_t *ti_lcd(void);
 int ti_lcd_w(void);

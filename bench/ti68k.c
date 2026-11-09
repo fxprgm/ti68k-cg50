@@ -414,6 +414,11 @@ void ti_run(uint32_t cycles)
 	}
 }
 
+void ti_sync_irq(void)
+{
+	update_irq();
+}
+
 void ti_key(int key, int down)
 {
 	if (key == TI_KEY_ON) {
